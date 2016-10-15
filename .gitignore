@@ -1,0 +1,14 @@
+log
+.sw*
+*.orig
+*.log
+*~
+*.*#
+*.#*
+*.test
+*.cpu
+*.mem
+sqlhelp
+dbhelper
+sqlhelper
+logs
