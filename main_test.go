@@ -58,8 +58,39 @@ func TestGenColumnStruct(t *testing.T) {
 
 }
 
+func TestMapTags(t *testing.T) {
+	tags := []struct {
+		input    string
+		expected map[string]string
+	}{
+		{
+			input: "db:\"id\"",
+			expected: map[string]string{
+				"db": "id",
+			},
+		},
+
+		{
+			input: "db:\"id\" json:\"json_id\"",
+			expected: map[string]string{
+				"db":   "id",
+				"json": "json_id",
+			},
+		},
+	}
+
+	for _, tag := range tags {
+		for k := range tag.expected {
+			val, ok := tagLookup(tag.input, k)
+			if !ok || tag.expected[k] != val {
+				t.Errorf("expected %v got %v for tag %v", tag.expected[k], val, k)
+			}
+		}
+	}
+}
+
 func TestMain(m *testing.M) {
-	// preformat expected output
+	// format expected output
 	src, err := format.Source([]byte(expectedOutput))
 	if err != nil {
 		fmt.Printf("fmt err %+v\n", err)

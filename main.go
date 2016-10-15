@@ -2,13 +2,16 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"flag"
+	"fmt"
 	"go/ast"
 	"go/format"
 	"go/parser"
 	"go/token"
 	"io/ioutil"
 	"log"
+	"strconv"
 	"strings"
 	"text/template"
 )
@@ -17,6 +20,7 @@ var (
 	srcpath = flag.String("path", "", "source code file to analyze")
 	structs = flag.String("structs", "", "structs to analyze, should be comman separated")
 	tag     = flag.String("tag", "db", "tag name to look")
+	suffix  = flag.String("suf", "column", "suffix for gen file name")
 )
 
 func main() {
@@ -40,7 +44,7 @@ func main() {
 		log.Fatalf("generation err %+v\n", err)
 	}
 
-	genSourcPath := strings.Join(psl[:len(psl)-1], "/") + "/" + strings.Replace(fname, ".go", "_columns.go", 1)
+	genSourcPath := strings.Join(psl[:len(psl)-1], "/") + "/" + strings.Replace(fname, ".go", "_"+*suffix+".go", 1)
 	err = ioutil.WriteFile(genSourcPath, gensrc, 0644)
 	if err != nil {
 		log.Fatalf("write file err %+v\n", err)
@@ -76,14 +80,20 @@ func genColumnStruct(fname, tagName string, input string, structs []string) ([]b
 	if err != nil {
 		return nil, err
 	}
+
 	for k, v := range m {
 		st := StructColumn{}
 		st.Name = k
+
 		for _, fld := range v.Fields.List {
+			tagVal, ok := tagLookup(fld.Tag.Value, tagName)
+			if !ok || tagVal == "" {
+				return nil, errors.New("value for defined tag: " + tagName + " not found")
+			}
 			st.Fields = append(st.Fields, Field{
 				Name: fld.Names[0].Name,
 				// get tag value we need
-				TagValue: mapTags(fld.Tag.Value)[tagName],
+				TagValue: tagVal,
 			})
 		}
 		mapOfStructs[st.Name] = st
@@ -114,6 +124,8 @@ func parse(fname, input string, structs []string) (string, map[string]*ast.Struc
 	fset := token.NewFileSet() // positions are relative to fset
 	f, err := parser.ParseFile(fset, fname, input, 0)
 	if err != nil {
+		fmt.Printf("parse err %+v\n", err) // output for debug
+
 		return pkg, m, err
 	}
 	pkg = f.Name.Name
@@ -151,17 +163,68 @@ func parse(fname, input string, structs []string) (string, map[string]*ast.Struc
 	return pkg, m, nil
 }
 
-// parse tag values from ast.BasicLit.Value
-// and return map[TagName]TagValue
-func mapTags(tag string) map[string]string {
-	tag = strings.Trim(tag, "`")
-	tag = strings.Trim(tag, " ")
-	sl := strings.Split(tag, ":")
-	m := make(map[string]string)
-	for i := 0; i < len(sl)-1; i += 2 {
-		m[sl[i]] = strings.Trim(sl[i+1], "\"")
+// For robustness and consistence tag lookup func used from reflect
+// std library https://golang.org/src/reflect/type.go
+//
+// Copyright 2009 The Go Authors. All rights reserved.
+//
+// Lookup returns the value associated with key in the tag string.
+// If the key is present in the tag the value (which may be empty)
+// is returned. Otherwise the returned value will be the empty string.
+// The ok return value reports whether the value was explicitly set in
+// the tag string. If the tag does not have the conventional format,
+// the value returned by Lookup is unspecified.
+func tagLookup(tag, key string) (value string, ok bool) {
+	for tag != "" {
+		// clean from raw quotes
+		tag = strings.Trim(tag, "`")
+		// Skip leading space.
+		i := 0
+		for i < len(tag) && tag[i] == ' ' {
+			i++
+		}
+		tag = tag[i:]
+		if tag == "" {
+			break
+		}
+
+		// Scan to colon. A space, a quote or a control character is a syntax error.
+		// Strictly speaking, control chars include the range [0x7f, 0x9f], not just
+		// [0x00, 0x1f], but in practice, we ignore the multi-byte control characters
+		// as it is simpler to inspect the tag's bytes than the tag's runes.
+		i = 0
+		for i < len(tag) && tag[i] > ' ' && tag[i] != ':' && tag[i] != '"' && tag[i] != 0x7f {
+			i++
+		}
+		if i == 0 || i+1 >= len(tag) || tag[i] != ':' || tag[i+1] != '"' {
+			break
+		}
+		name := string(tag[:i])
+		tag = tag[i+1:]
+
+		// Scan quoted string to find value.
+		i = 1
+		for i < len(tag) && tag[i] != '"' {
+			if tag[i] == '\\' {
+				i++
+			}
+			i++
+		}
+		if i >= len(tag) {
+			break
+		}
+		qvalue := string(tag[:i+1])
+		tag = tag[i+1:]
+
+		if key == name {
+			value, err := strconv.Unquote(qvalue)
+			if err != nil {
+				break
+			}
+			return value, true
+		}
 	}
-	return m
+	return "", false
 }
 
 var generatedTmpl = template.Must(template.New("generated").Parse(columnTmpl))
